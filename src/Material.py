@@ -17,6 +17,8 @@ class Material:
 water = Material(1000, 1500, 1000)
 basalt = Material(2700, 5250, 1000, 2500, 500)
 sand = Material(1900, 1650, 200, 500, 40)
+sediment = Material(1700, 1800, 50)
+air = Material(1, 340, 1)
 
 if __name__ == "__main__":
     print(water, basalt, sand)

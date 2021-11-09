@@ -18,12 +18,11 @@ class Module(ABC):
     j: int
     t: list = field(init=False, default_factory=list)
     y: list = field(init=False, default_factory=list)
-    coords: tuple = field(init=False, default_factory=tuple)
 
     def __post_init__(self):
         self.i = int(self.i)
         self.j = int(self.j)
-        self.coords = (self.i, self.j)
+        self.coords = np.array([self.i, self.j])
 
     def temporal(self):
         fig, ax = plt.subplots()
@@ -67,7 +66,7 @@ class Emitter(Module):
     signal: Callable[[float], float]
 
     def __repr__(self):
-        return f"Emitter at {self.coords}"
+        return f"Emitter at ({self.i}, {self.j})"
 
     def __getitem__(self, key):
         if key in self.t:
@@ -80,7 +79,7 @@ class Emitter(Module):
 
 class Reciever(Module):
     def __repr__(self):
-        return f"Reciever at {self.coords}"
+        return f"Reciever at ({self.i}, {self.j})"
 
     def __getitem__(self, key):
         if key in self.t:
