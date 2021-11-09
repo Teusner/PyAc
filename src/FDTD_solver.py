@@ -53,20 +53,20 @@ class SolverFDTD2D:
         self.U = cuda.to_device(np.zeros((self.size[0], self.size[1], 2), dtype=cp.float64))
         self.P = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=cp.float64))
         self.R = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=cp.float64))
+
         self.rho_i = cuda.to_device(np.array([[m.rho for m in line] for line in self.M]))
         self.eta_i = cuda.to_device(np.array([[m.eta for m in line] for line in self.M]))
         self.mu_i = cuda.to_device(np.array([[m.mu for m in line] for line in self.M]))
         Q_tau_g = self.Q_tau_gamma()
         self.tau_gamma_p_i = cuda.to_device(np.array([[Q_tau_g / m.Qp for m in line] for line in self.M]))
         self.tau_gamma_s_i = cuda.to_device(np.array([[Q_tau_g / m.Qs for m in line] for line in self.M]))
-        self.B = cuda.to_device(self.Border())
-        print(self.B.shape)
+        self.B_i = cuda.to_device(self.Border().T)
 
     def set_border_attenuation(self, x):
         self.border = x
-        self.size += np.array([x[0, 1] + x[1, 1], x[0, 0] + x[1, 0]])
-        self.xindex = np.s_[x[0, 1] + 1:self.n - x[1, 1]]
-        self.yindex = np.s_[x[0, 0] + 1:self.m - x[1, 0]]
+        self.size += np.array([x[0, 0] + x[1, 0], x[0, 1] + x[1, 1]])
+        self.xindex = np.s_[x[0, 0] :self.n]
+        self.yindex = np.s_[x[0, 1] :self.m]
 
     def Q_tau_gamma(self):
         def F(omega, tau_sigma):
@@ -76,10 +76,12 @@ class SolverFDTD2D:
         return i1 / i2
 
     def Border(self):
-        first_x = np.hanning(2 * self.border[0, 1])[:self.border[0, 1]]
-        last_x = np.hanning(2 * self.border[1, 1])[self.border[1, 1]:]
-        first_y = np.hanning(2 * self.border[0, 0])[:self.border[0, 0]]
-        last_y = np.hanning(2 * self.border[1, 0])[self.border[1, 0]:]
+        k_min = 0.02
+        ksi = lambda i, N, ksi_min: (1 - ksi_min) * ((1 + np.cos(i * np.pi / N)) / 2) ** 3 + ksi_min
+        first_x = ksi(np.arange(-self.border[0, 0], 0, 1), self.border[0, 0], k_min)
+        last_x = ksi(np.arange(0, self.border[1, 0], 1), self.border[1, 0], k_min)
+        first_y = ksi(np.arange(-self.border[0, 1], 0, 1), self.border[0, 1], k_min)
+        last_y = ksi(np.arange(0, self.border[1, 1], 1), self.border[1, 1], k_min)
         return np.sqrt(np.outer(np.hstack((first_y, np.ones(self.m), last_y)), np.hstack((first_x, np.ones(self.n), last_x))))
 
     def r(self, t, t0, omega_p):
@@ -89,11 +91,10 @@ class SolverFDTD2D:
         return 1 / (sigma * cp.sqrt(2 * cp.pi)) * cp.exp(- (t - mu) ** 2 * (2 * sigma ** 2))
 
     def f(self, ti):
-        F = cp.zeros((self.n, self.m), dtype=cp.float64)
+        F = cp.zeros(self.size, dtype=cp.float64)
         for e in self.emitters:
-            c = list(e.coords)
-            c[0] += 20
-            F[e.coords] = e[ti]
+            c = e.coords + self.border[0]
+            F[c[0], c[1]] = e[ti]
         return F
 
     def CourantNumber(self):
@@ -109,18 +110,19 @@ class SolverFDTD2D:
         # Getting the number of frames to render
         N = int(dT / self.dt)
         for i in range (2, len(self.t) - 1):
-            self.FDTD2D[self.blockspergrid, self.threadsperblock](self.size[0], self.size[1], self.P, self.R, self.U, self.B, self.f(i * self.dt), self.dx, self.dy, self.dt, self.rho_i, self.eta_i, self.mu_i, self.tau_gamma_p_i, self.tau_gamma_s_i, self.tau_sigma[0])
+            self.FDTD2D[self.blockspergrid, self.threadsperblock](self.P, self.R, self.U, self.B_i, self.f(i * self.dt), self.dx, self.dy, self.dt, self.rho_i, self.eta_i, self.mu_i, self.tau_gamma_p_i, self.tau_gamma_s_i, self.tau_sigma[0])
             for r in self.recievers:
-                c = np.array(r.coords) + self.border[0]
+                c = r.coords + self.border[0]
                 r[i * self.dt] = np.sum(self.P[c[0], c[1]])
             if i % N == 0:
                 yield i, self.P
 
     @staticmethod
     @cuda.jit
-    def FDTD2D(n, m, P, R, U, B, F, dx, dy, dt, rho, eta, mu, tau_gamma_p, tau_gamma_s, tau_s):
+    def FDTD2D(P, R, U, B, F, dx, dy, dt, rho, eta, mu, tau_gamma_p, tau_gamma_s, tau_s):
         i, j = cuda.grid(2)
-        if 2 <= i < n - 3  and 2 <= j < m - 3:
+        n, m, _ = P.shape
+        if 2 <= i <= n - 3  and 2 <= j <= m - 3:
             # Velocity computing
             dPxx = (- P[i, j+2, 0] + 27.0 * (P[i, j+1, 0] - P[i, j, 0]) + P[i, j-1, 0]) / (24 * dx)
             dPxy = (- P[i+1, j, 2] + 27.0 * (P[i, j, 2] - P[i-1, j, 2]) + P[i-2, j, 2]) / (24 * dy)
@@ -149,6 +151,9 @@ class SolverFDTD2D:
         P[i, j, 2] *= B[i, j]
         U[i, j, 0] *= B[i, j]
         U[i, j, 1] *= B[i, j]
+        R[i, j, 0] *= B[i, j]
+        R[i, j, 1] *= B[i, j]
+        R[i, j, 2] *= B[i, j]
         
 
     
@@ -157,7 +162,7 @@ if __name__ == "__main__":
     dx = 0.5
     dy = 0.5
 
-    xmin, xmax = 0, 2000
+    xmin, xmax = 0, 200
     ymin, ymax = 0, 120
     tmin, tmax = 0, 30
 
@@ -191,18 +196,18 @@ if __name__ == "__main__":
 
     for i, P in s.solve(dT):
         plt.title("Time: {:.2f}s".format(i * dt))
-        im.set_array(np.sum(P[s.xindex, s.yindex], axis=2).T)
-        plt.savefig(f"./output/2dfdtd_{i:04}.png", dpi=180)
+        im.set_array(np.sum(P, axis=2).T) #[s.xindex, s.yindex]
+        plt.savefig(f"./output/2dfdtd_{i:05}.png", dpi=180)
 
-    fig, ax = r1.temporal()
-    plt.savefig("./output/temporal_reciever.png")
-    fig, ax = r1.fft()
-    plt.savefig("./output/fft_reciever.png")
-    fig, ax = r1.spectrogram()
-    plt.savefig("./output/spectorgram_reciever.png")
-    fig, ax = e1.temporal()
-    plt.savefig("./output/temporal_emitter.png")
-    fig, ax = e1.fft()
-    plt.savefig("./output/fft_emitter.png")
-    fig, ax = e1.spectrogram()
-    plt.savefig("./output/spectrogram_emitter.png")
+    # fig, ax = r1.temporal()
+    # plt.savefig("./output/temporal_reciever.png")
+    # fig, ax = r1.fft()
+    # plt.savefig("./output/fft_reciever.png")
+    # fig, ax = r1.spectrogram()
+    # plt.savefig("./output/spectorgram_reciever.png")
+    # fig, ax = e1.temporal()
+    # plt.savefig("./output/temporal_emitter.png")
+    # fig, ax = e1.fft()
+    # plt.savefig("./output/fft_emitter.png")
+    # fig, ax = e1.spectrogram()
+    # plt.savefig("./output/spectrogram_emitter.png")
