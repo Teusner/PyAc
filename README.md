@@ -15,5 +15,5 @@ The solver is in `src/FDTD_solver.py` and a description file is available in `sr
 Here are some results we could get by creating a scene and by launching the solver :
 
 <p align="center">
-    <img width="460" height="300" src="./docs/fdtd2d_water_sediment_basalt.gif">
+    <img src="./docs/fdtd2d_water_sediment_basalt.gif">
 </p>
