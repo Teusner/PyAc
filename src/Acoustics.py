@@ -14,15 +14,10 @@ def d_gaussian(x, mu, sig):
 
 @dataclass
 class Module(ABC):
-    i: int
-    j: int
+    x: float
+    y: float
     t: list = field(init=False, default_factory=list)
-    y: list = field(init=False, default_factory=list)
-
-    def __post_init__(self):
-        self.i = int(self.i)
-        self.j = int(self.j)
-        self.coords = np.array([self.i, self.j])
+    s: list = field(init=False, default_factory=list)
 
     def temporal(self):
         fig, ax = plt.subplots()
@@ -30,8 +25,8 @@ class Module(ABC):
         ax.set_xlabel(r"Time ($s$)")
         ax.set_ylabel(r"Pressure ($Pa$)")
         ax.grid(True)
-        if self.t and self.y:
-            ax.plot(self.t, self.y)
+        if self.t and self.s:
+            ax.plot(self.t, self.s)
             ax.set_xlim(np.min(self.t), np.max(self.t))
         return fig, ax
 
@@ -41,9 +36,9 @@ class Module(ABC):
         ax.set_xlabel(r"Frequency ($Hz$)")
         ax.set_ylabel(r"Magnitude ($Power$)")
         ax.grid(True)
-        if self.t and self.y:
+        if self.t and self.s:
             freq = np.fft.fftfreq(len(self.t), self.t[1] - self.t[0])
-            sp = np.fft.fft(self.y)
+            sp = np.fft.fft(self.s)
             ax.plot(freq, np.abs(sp.real))
             ax.set_xlim(np.min(freq), np.max(freq))
         return fig, ax
@@ -54,8 +49,8 @@ class Module(ABC):
         ax.set_xlabel(r"Time ($s$)")
         ax.set_ylabel(r"Frequency ($Hz$)")
         ax.grid(True)
-        if self.t and self.y:
-            f, t, Sxx = signal.spectrogram(np.array(self.y), fs=30)
+        if self.t and self.s:
+            f, t, Sxx = signal.spectrogram(np.array(self.s), fs=30)
             ax.pcolormesh(t, f, Sxx, shading="auto")
             # ax.specgram(self.y, Fs=30)
         return fig, ax
@@ -66,29 +61,29 @@ class Emitter(Module):
     signal: Callable[[float], float]
 
     def __repr__(self):
-        return f"Emitter at ({self.i}, {self.j})"
+        return f"Emitter at ({self.x}, {self.y})"
 
     def __getitem__(self, key):
         if key in self.t:
             i = self.t.index(key)
-            return self.y[i]
+            return self.s[i]
         
         self.t.append(key)
-        self.y.append((self.signal(key)).tolist())
-        return self.y[-1]
+        self.s.append((self.signal(key)).tolist())
+        return self.s[-1]
 
 class Reciever(Module):
     def __repr__(self):
-        return f"Reciever at ({self.i}, {self.j})"
+        return f"Reciever at ({self.x}, {self.y})"
 
     def __getitem__(self, key):
         if key in self.t:
             i = self.t.index(key)
-            return self.y[i]
+            return self.s[i]
 
     def __setitem__(self, key, value):
         self.t.append(key)
-        self.y.append(value)
+        self.s.append(value)
 
 
 if __name__ == "__main__":
@@ -106,7 +101,7 @@ if __name__ == "__main__":
 
     # Filtering
     sos = signal.butter(10, 20, 'lp', fs=1000, output='sos')
-    filtered = signal.sosfilt(sos, e.y)
+    filtered = signal.sosfilt(sos, e.s)
 
     # Hydrophone
     r = Reciever(100, 200)
