@@ -62,7 +62,6 @@ class SolverFDTD2D:
         self.size += (np.sum(x, axis=0).flatten() / np.array([self.dy, self.dx])).astype(np.int64)
         self.i_index = np.s_[int(x[0, 0] / self.dy):int(x[0, 0] / self.dy)+self.n]
         self.j_index = np.s_[int(x[0, 1] / self.dx):int(x[0, 1] / self.dx)+self.m]
-        print(self.i_index, self.j_index)
 
     def Q_tau_gamma(self):
         def F(omega, tau_sigma):
