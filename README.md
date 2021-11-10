@@ -17,3 +17,7 @@ Here are some results we could get by creating a scene and by launching the solv
 <div align="center">
     <img src="./docs/fdtd2d_water_sediment_basalt.gif">
 </div>
+
+| Hydrophone at (2000, 20) | Hydrophone at (2000, 40) | Hydrophone at (2000, 60) |
+|:------------------------:|:------------------------:|:------------------------:|
+| ![](docs/reciever_0.png) | ![](docs/reciever_1.png) | ![](docs/reciever_2.png) |
