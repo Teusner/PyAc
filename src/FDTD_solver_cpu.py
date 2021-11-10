@@ -1,11 +1,9 @@
-import scipy
 from Acoustics import *
 from Material import *
 
-import cupy as cp
 import math
 import matplotlib.pyplot as plt
-from numba import cuda
+from numba import jit
 import numpy as np
 from scipy import signal, integrate
 
@@ -16,9 +14,9 @@ class SolverFDTD2D:
         self.dx = dx
         self.dy = dy
         self.dt = dt
-        self.t = cp.arange(tmin, tmax, dt)
-        self.x = cp.arange(xmin, xmax, dx)
-        self.y = cp.arange(ymin, ymax, dy)
+        self.t = np.arange(tmin, tmax, dt)
+        self.x = np.arange(xmin, xmax, dx)
+        self.y = np.arange(ymin, ymax, dy)
 
         # Acoustics modules
         self.emitters = []
@@ -44,18 +42,18 @@ class SolverFDTD2D:
         self.M = M
 
     def allocate_arrays(self):
-        self.U = cuda.to_device(np.zeros((self.size[0], self.size[1], 2), dtype=cp.float64))
-        self.P = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=cp.float64))
-        self.R = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=cp.float64))
+        self.P = np.zeros((self.size[0], self.size[1], 3), dtype=np.float64)
+        self.U = np.zeros((self.size[0], self.size[1], 2), dtype=np.float64)
+        self.R = np.zeros((self.size[0], self.size[1], 3), dtype=np.float64)
 
         b = (self.border / np.array([[self.dy, self.dx], [self.dy, self.dx]])).astype(np.int64)
-        self.rho_i = cuda.to_device(np.pad(np.array([[m.rho for m in line] for line in self.M]), pad_width=b, mode="edge"))
-        self.eta_i = cuda.to_device(np.pad(np.array([[m.eta for m in line] for line in self.M]), pad_width=b, mode="edge"))
-        self.mu_i = cuda.to_device(np.pad(np.array([[m.mu for m in line] for line in self.M]), pad_width=b, mode="edge"))
+        self.rho_i = np.pad(np.array([[m.rho for m in line] for line in self.M]), pad_width=b, mode="edge")
+        self.eta_i = np.pad(np.array([[m.eta for m in line] for line in self.M]), pad_width=b, mode="edge")
+        self.mu_i = np.pad(np.array([[m.mu for m in line] for line in self.M]), pad_width=b, mode="edge")
         Q_tau_g = self.Q_tau_gamma()
-        self.tau_gamma_p_i = cuda.to_device(np.pad(np.array([[Q_tau_g / m.Qp for m in line] for line in self.M]), pad_width=b, mode="edge"))
-        self.tau_gamma_s_i = cuda.to_device(np.pad(np.array([[Q_tau_g / m.Qs for m in line] for line in self.M]), pad_width=b, mode="edge"))
-        self.B_i = cuda.to_device(self.Border().T)
+        self.tau_gamma_p_i = np.pad(np.array([[Q_tau_g / m.Qp for m in line] for line in self.M]), pad_width=b, mode="edge")
+        self.tau_gamma_s_i = np.pad(np.array([[Q_tau_g / m.Qs for m in line] for line in self.M]), pad_width=b, mode="edge")
+        self.B_i = self.Border().T
 
     def set_border_attenuation(self, x):
         self.border = x
@@ -80,13 +78,13 @@ class SolverFDTD2D:
         return np.sqrt(np.outer(np.hstack((first_j, np.ones(self.m), last_j)), np.hstack((first_i, np.ones(self.n), last_i))))
 
     def r(self, t, t0, omega_p):
-        return (1 - 0.5 * (omega_p * (t - t0))**2) * cp.exp(- (omega_p * (t - t0))**2 / 4)
+        return (1 - 0.5 * (omega_p * (t - t0))**2) * np.exp(- (omega_p * (t - t0))**2 / 4)
 
     def g(self, t, mu, sigma):
-        return 1 / (sigma * cp.sqrt(2 * cp.pi)) * cp.exp(- (t - mu) ** 2 * (2 * sigma ** 2))
+        return 1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(- (t - mu) ** 2 * (2 * sigma ** 2))
 
     def f(self, ti):
-        F = cp.zeros(self.size, dtype=cp.float64)
+        F = np.zeros(self.size, dtype=np.float64)
         for e in self.emitters:
             F[int((e.y + self.border[0, 0]) / self.dy), int((e.x + self.border[0, 1]) / self.dx)] = e[ti]
         return F
@@ -99,13 +97,7 @@ class SolverFDTD2D:
         # Allocating extended arrays
         self.allocate_arrays()
 
-        # print(f"Courant Number: {self.CourantNumber()}")
-
-        # Cuda configuration
-        self.threadsperblock = (16, 16)
-        blockspergrid_x = math.ceil(self.size[0] / self.threadsperblock[0])
-        blockspergrid_y = math.ceil(self.size[1] / self.threadsperblock[1])
-        self.blockspergrid = (blockspergrid_x, blockspergrid_y)
+        print(f"Courant Number: {self.CourantNumber()}")
 
         dT = kwargs.get('dT', None)
         ret = False
@@ -115,39 +107,39 @@ class SolverFDTD2D:
 
         # Getting the number of frames to render
         for i in range (2, len(self.t) - 1):
-            self.FDTD2D[self.blockspergrid, self.threadsperblock](self.P, self.R, self.U, self.B_i, self.f(i * self.dt), self.dx, self.dy, self.dt, self.rho_i, self.eta_i, self.mu_i, self.tau_gamma_p_i, self.tau_gamma_s_i, self.tau_sigma[0])
+            self.FDTD2D(self.P, self.R, self.U, self.B_i, self.f(i * self.dt), self.dx, self.dy, self.dt, self.rho_i, self.eta_i, self.mu_i, self.tau_gamma_p_i, self.tau_gamma_s_i, self.tau_sigma[0])
             for r in self.recievers:
                 r[i * self.dt] = np.sum(self.P[int((r.y + self.border[0, 0])/ self.dy), int((r.x + self.border[0, 1]) / self.dx)])
             if ret and i % N == 0:
                     yield i, self.P
 
     @staticmethod
-    @cuda.jit
+    @jit
     def FDTD2D(P, R, U, B, F, dx, dy, dt, rho, eta, mu, tau_gamma_p, tau_gamma_s, tau_s):
-        i, j = cuda.grid(2)
         n, m, _ = P.shape
-        if 2 <= i <= n - 3  and 2 <= j <= m - 3:
-            # Velocity computing
-            dPxx = (- P[i, j+2, 0] + 27.0 * (P[i, j+1, 0] - P[i, j, 0]) + P[i, j-1, 0]) / (24 * dx)
-            dPxy = (- P[i+1, j, 2] + 27.0 * (P[i, j, 2] - P[i-1, j, 2]) + P[i-2, j, 2]) / (24 * dy)
-            U[i, j, 0] += dt / rho[i, j] * (dPxx + dPxy)
-            dPxy = (- P[i, j+1, 2] + 27.0 * (P[i, j][2] - P[i, j-1, 2]) + P[i, j-2, 2]) / (24 * dx)
-            dPyy = (- P[i+2, j, 1] + 27.0 * (P[i+1, j, 1] - P[i, j, 1]) + P[i-1, j, 1]) / (24 * dy)
-            U[i, j, 1] += dt / rho[i, j] * (dPyy + dPxy)
+        for i in range(2, n-2):
+            for j in range(2, m-2):
+                # Velocity computing
+                dPxx = (- P[i, j+2, 0] + 27.0 * (P[i, j+1, 0] - P[i, j, 0]) + P[i, j-1, 0]) / (24 * dx)
+                dPxy = (- P[i+1, j, 2] + 27.0 * (P[i, j, 2] - P[i-1, j, 2]) + P[i-2, j, 2]) / (24 * dy)
+                U[i, j, 0] += dt / rho[i, j] * (dPxx + dPxy)
+                dPxy = (- P[i, j+1, 2] + 27.0 * (P[i, j][2] - P[i, j-1, 2]) + P[i, j-2, 2]) / (24 * dx)
+                dPyy = (- P[i+2, j, 1] + 27.0 * (P[i+1, j, 1] - P[i, j, 1]) + P[i-1, j, 1]) / (24 * dy)
+                U[i, j, 1] += dt / rho[i, j] * (dPyy + dPxy)
 
-            # Pressure computing
-            Uxx = (- U[i, j+1, 0] + 27 * (U[i, j, 0] - U[i, j-1, 0]) + U[i, j-2, 0]) / (24 * dx)
-            Uyy = (- U[i+1, j, 1] + 27 * (U[i, j, 1] - U[i-1, j, 1]) + U[i-2, j, 1]) / (24 * dy)
-            Uyx = (- U[i, j+2, 1] + 27 * (U[i, j+1, 1] - U[i, j, 1]) + U[i, j-1, 1]) / (24 * dx)
-            Uxy = (- U[i+2, j, 0] + 27 * (U[i+1, j, 0] - U[i, j, 0]) + U[i-1, j, 0]) / (24 * dy)
+                # Pressure computing
+                Uxx = (- U[i, j+1, 0] + 27 * (U[i, j, 0] - U[i, j-1, 0]) + U[i, j-2, 0]) / (24 * dx)
+                Uyy = (- U[i+1, j, 1] + 27 * (U[i, j, 1] - U[i-1, j, 1]) + U[i-2, j, 1]) / (24 * dy)
+                Uyx = (- U[i, j+2, 1] + 27 * (U[i, j+1, 1] - U[i, j, 1]) + U[i, j-1, 1]) / (24 * dx)
+                Uxy = (- U[i+2, j, 0] + 27 * (U[i+1, j, 0] - U[i, j, 0]) + U[i-1, j, 0]) / (24 * dy)
 
-            R[i, j, 0] = (2 * tau_s - dt) / (2 * tau_s + dt) * R[i, j, 0] - 2 * dt / (2 * tau_s + dt) * (eta[i, j] * tau_gamma_p[i, j] * (Uxx + Uyy) - 2 * mu[i, j] * tau_gamma_s[i, j] * Uyy)
-            R[i, j, 1] = (2 * tau_s - dt) / (2 * tau_s + dt) * R[i, j, 1] - 2 * dt / (2 * tau_s + dt) * (eta[i, j] * tau_gamma_p[i, j] * (Uxx + Uyy) - 2 * mu[i, j] * tau_gamma_s[i, j] * Uxx)
-            R[i, j, 2] = (2 * tau_s - dt) / (2 * tau_s + dt) * R[i, j, 2] - 2 * dt / (2 * tau_s + dt) * (mu[i, j] * tau_gamma_s[i, j] * (Uxy + Uyx))
+                R[i, j, 0] = (2 * tau_s - dt) / (2 * tau_s + dt) * R[i, j, 0] - 2 * dt / (2 * tau_s + dt) * (eta[i, j] * tau_gamma_p[i, j] * (Uxx + Uyy) - 2 * mu[i, j] * tau_gamma_s[i, j] * Uyy)
+                R[i, j, 1] = (2 * tau_s - dt) / (2 * tau_s + dt) * R[i, j, 1] - 2 * dt / (2 * tau_s + dt) * (eta[i, j] * tau_gamma_p[i, j] * (Uxx + Uyy) - 2 * mu[i, j] * tau_gamma_s[i, j] * Uxx)
+                R[i, j, 2] = (2 * tau_s - dt) / (2 * tau_s + dt) * R[i, j, 2] - 2 * dt / (2 * tau_s + dt) * (mu[i, j] * tau_gamma_s[i, j] * (Uxy + Uyx))
 
-            P[i, j, 0] += dt * (eta[i, j] * (tau_gamma_p[i, j] + 1) * (Uxx + Uyy) - 2 * mu[i, j] * (tau_gamma_s[i, j] + 1) * Uyy + R[i, j, 0] + F[i, j])
-            P[i, j, 1] += dt * (eta[i, j] * (tau_gamma_p[i, j] + 1) * (Uxx + Uyy) - 2 * mu[i, j] * (tau_gamma_s[i, j] + 1) * Uxx + R[i, j, 1] + F[i, j])
-            P[i, j, 2] += dt * (mu[i, j] * (tau_gamma_s[i, j] + 1) * (Uxy + Uyx) + R[i, j, 2])
+                P[i, j, 0] += dt * (eta[i, j] * (tau_gamma_p[i, j] + 1) * (Uxx + Uyy) - 2 * mu[i, j] * (tau_gamma_s[i, j] + 1) * Uyy + R[i, j, 0] + F[i, j])
+                P[i, j, 1] += dt * (eta[i, j] * (tau_gamma_p[i, j] + 1) * (Uxx + Uyy) - 2 * mu[i, j] * (tau_gamma_s[i, j] + 1) * Uxx + R[i, j, 1] + F[i, j])
+                P[i, j, 2] += dt * (mu[i, j] * (tau_gamma_s[i, j] + 1) * (Uxy + Uyx) + R[i, j, 2])
 
         # Boundary attenuation
         P[i, j, 0] *= B[i, j]
