@@ -9,3 +9,9 @@ This repository contains GPU based Finite Difference Time Domain implemented in 
 The solver is in `src/FDTD_solver.py` and a description file is available in `src/Proteus.py`.
 
 > :warning: The architecture of this repository including module organization and naming schemes are likely to evolve in the near future
+
+## Examples
+
+Here are some results we could get by creating a scene and by launching the solver :
+
+![Acoustic GIF](./docs/fdtd2d_xwter_sediment_basalt.gif)
