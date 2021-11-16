@@ -95,11 +95,9 @@ class SolverFDTD2D:
         Cp = np.array([[m.cp for m in line] for line in self.M])
         return np.max(Cp) * self.dt / np.sqrt(self.dx**2 + self.dy**2)
 
-    def solve(self, *args, **kwargs):
+    def solve(self, dT=None):
         # Allocating extended arrays
         self.allocate_arrays()
-
-        # print(f"Courant Number: {self.CourantNumber()}")
 
         # Cuda configuration
         self.threadsperblock = (16, 16)
@@ -107,7 +105,6 @@ class SolverFDTD2D:
         blockspergrid_y = math.ceil(self.size[1] / self.threadsperblock[1])
         self.blockspergrid = (blockspergrid_x, blockspergrid_y)
 
-        dT = kwargs.get('dT', None)
         ret = False
         if dT is not None:
             N = int(dT / self.dt)

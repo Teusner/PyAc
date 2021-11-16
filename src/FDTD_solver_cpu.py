@@ -99,8 +99,10 @@ class SolverFDTD2D:
 
         print(f"Courant Number: {self.CourantNumber()}")
 
-        dT = kwargs.get('dT', None)
         ret = False
+        dT = None
+        for arg in args:
+            dT = arg
         if dT is not None:
             N = int(dT / self.dt)
             ret = True

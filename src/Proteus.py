@@ -1,18 +1,18 @@
 from Acoustics import *
 from Material import *
-from FDTD_solver_cpu import SolverFDTD2D
-import pickle
+from FDTD_solver import SolverFDTD2D
 import time
+import pickle
 import acoustics as ac
 
 if __name__ == "__main__":
-    dt = 2e-4
-    dx = 2
-    dy = 2
+    dt = 5e-7
+    dx = 0.5
+    dy = 0.5
 
     xmin, xmax = 0, 2000
     ymin, ymax = 0, 140
-    tmin, tmax = 0, 2
+    tmin, tmax = 0, 3
 
     # Solver
     s = SolverFDTD2D(xmin, xmax, dx, ymin, ymax, dy, tmin, tmax, dt)
@@ -27,21 +27,22 @@ if __name__ == "__main__":
     # Recievers
     r1 = Reciever(2000, 20)
     s.recievers.append(r1)
-    # r2 = Reciever(2000, 40)
-    # s.recievers.append(r2)
-    # r3 = Reciever(2000, 60 / dy)
-    # s.recievers.append(r3)
+    r2 = Reciever(2000, 40)
+    s.recievers.append(r2)
+    r3 = Reciever(2000, 60 / dy)
+    s.recievers.append(r3)
 
     # Materials
     M = np.empty((s.n, s.m), dtype=object)
     M[:, :] = water
-    # M[:3, :] = air
-    # M[int(100/dy):int(120/dy), :] = sediment
-    # M[int(120/dy):int(140/dy), :] = basalt
+    M[:3, :] = air
+    M[int(100/dy):int(120/dy), :] = sediment
+    M[int(120/dy):int(140/dy), :] = basalt
     s.add_scene(M)
 
     # Simulation
-    fps = 30
+    print(f"Courant Number: {s.CourantNumber()}")
+    fps = 60
     dT = 1 / fps
 
     fig = plt.figure()
@@ -56,20 +57,20 @@ if __name__ == "__main__":
     plt.savefig(f"./output/2dfdtd_{0:05}.png", dpi=180)
 
     t0 = time.time()
-    for i, P in s.solve():
+    for i, P in s.solve(dT):
         plt.title("Time: {:4.0f} ms".format(i * dt * 1000))
         im.set_data(np.sum(P[s.i_index, s.j_index], axis=2))
         plt.savefig(f"./output/2dfdtd_{int(i * dt / dT) + 1:05}.png", dpi=180)
     print(f"Took : {time.time() - t0}")
 
-    # for i, r in enumerate(s.recievers):
-    #     fig, ax = r.temporal()
-    #     plt.savefig(f"./output/temporal_reciever_{i}.png")
-    #     fig, ax = r.fft()
-    #     plt.savefig(f"./output/fft_reciever_{i}.png")
-    #     fig, ax = r.spectrogram()
-    #     plt.savefig(f"./output/spectorgram_reciever_{i}.png")
+    for i, r in enumerate(s.recievers):
+        fig, ax = r.temporal()
+        plt.savefig(f"./output/temporal_reciever_{i}.png")
+        fig, ax = r.fft()
+        plt.savefig(f"./output/fft_reciever_{i}.png")
+        fig, ax = r.spectrogram()
+        plt.savefig(f"./output/spectorgram_reciever_{i}.png")
 
-    #     filehandler = open(f"./output/Reciever_{i}.obj","wb")
-    #     pickle.dump(r, filehandler)
-    #     filehandler.close()
+        filehandler = open(f"./output/Reciever_{i}.obj","wb")
+        pickle.dump(r, filehandler)
+        filehandler.close()
