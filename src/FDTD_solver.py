@@ -9,6 +9,10 @@ from numba import cuda
 import numpy as np
 from scipy import signal, integrate
 
+import time
+
+# Global variables to be stored in shared memory [n, m, dx, dy, dt]
+global_data = np.zeros(5)
 
 class SolverFDTD2D:
     def __init__(self, xmin, xmax, dx, ymin, ymax, dy, tmin, tmax, dt):
@@ -44,11 +48,13 @@ class SolverFDTD2D:
         self.M = M
 
     def allocate_arrays(self):
-        self.U = cuda.to_device(np.zeros((self.size[0], self.size[1], 2), dtype=cp.float64))
-        self.P = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=cp.float64))
-        self.R = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=cp.float64))
+        global global_data
+        global_data = np.array([self.n, self.m, self.dx, self.dy, self.dt])
+        self.U = cuda.to_device(np.zeros((self.size[0], self.size[1], 2), dtype=np.float32))
+        self.P = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=np.float32))
+        self.R = cuda.to_device(np.zeros((self.size[0], self.size[1], 3), dtype=np.float32))
 
-        b = (self.border / np.array([[self.dy, self.dx], [self.dy, self.dx]])).astype(np.int64)
+        b = (self.border / np.array([[self.dy, self.dx], [self.dy, self.dx]])).astype(np.int32)
         self.rho_i = cuda.to_device(np.pad(np.array([[m.rho for m in line] for line in self.M]), pad_width=b, mode="edge"))
         self.eta_i = cuda.to_device(np.pad(np.array([[m.eta for m in line] for line in self.M]), pad_width=b, mode="edge"))
         self.mu_i = cuda.to_device(np.pad(np.array([[m.mu for m in line] for line in self.M]), pad_width=b, mode="edge"))
@@ -59,7 +65,7 @@ class SolverFDTD2D:
 
     def set_border_attenuation(self, x):
         self.border = x
-        self.size += (np.sum(x, axis=0).flatten() / np.array([self.dy, self.dx])).astype(np.int64)
+        self.size += (np.sum(x, axis=0).flatten() / np.array([self.dy, self.dx])).astype(np.int32)
         self.i_index = np.s_[int(x[0, 0] / self.dy):int(x[0, 0] / self.dy)+self.n]
         self.j_index = np.s_[int(x[0, 1] / self.dx):int(x[0, 1] / self.dx)+self.m]
 
@@ -86,7 +92,7 @@ class SolverFDTD2D:
         return 1 / (sigma * cp.sqrt(2 * cp.pi)) * cp.exp(- (t - mu) ** 2 * (2 * sigma ** 2))
 
     def f(self, ti):
-        F = cp.zeros(self.size, dtype=cp.float64)
+        F = cp.zeros(self.size, dtype=cp.float32)
         for e in self.emitters:
             F[int((e.y + self.border[0, 0]) / self.dy), int((e.x + self.border[0, 1]) / self.dx)] = e[ti]
         return F
@@ -112,17 +118,18 @@ class SolverFDTD2D:
 
         # Getting the number of frames to render
         for i in range (2, len(self.t) - 1):
-            self.FDTD2D[self.blockspergrid, self.threadsperblock](self.P, self.R, self.U, self.B_i, self.f(i * self.dt), self.dx, self.dy, self.dt, self.rho_i, self.eta_i, self.mu_i, self.tau_gamma_p_i, self.tau_gamma_s_i, self.tau_sigma[0])
+            self.FDTD2D[self.blockspergrid, self.threadsperblock](self.P, self.R, self.U, self.B_i, self.f(i * self.dt), self.rho_i, self.eta_i, self.mu_i, self.tau_gamma_p_i, self.tau_gamma_s_i, self.tau_sigma[0])
             for r in self.recievers:
                 r[i * self.dt] = np.sum(self.P[int((r.y + self.border[0, 0])/ self.dy), int((r.x + self.border[0, 1]) / self.dx)])
             if ret and i % N == 0:
-                    yield i, self.P
+                    yield i
 
     @staticmethod
     @cuda.jit
-    def FDTD2D(P, R, U, B, F, dx, dy, dt, rho, eta, mu, tau_gamma_p, tau_gamma_s, tau_s):
+    def FDTD2D(P, R, U, B, F, rho, eta, mu, tau_gamma_p, tau_gamma_s, tau_s):
         i, j = cuda.grid(2)
-        n, m, _ = P.shape
+        g = cuda.const.array_like(global_data)
+        n, m, dx, dy, dt = g[0], g[1], g[2], g[3], g[4]
         if 2 <= i <= n - 3  and 2 <= j <= m - 3:
             # Velocity computing
             dPxx = (- P[i, j+2, 0] + 27.0 * (P[i, j+1, 0] - P[i, j, 0]) + P[i, j-1, 0]) / (24 * dx)
@@ -158,56 +165,45 @@ class SolverFDTD2D:
 
     
 if __name__ == "__main__":
-    dt = 0.001
-    dx = 0.5
-    dy = 0.5
+    dt = 5e-5
+    dx = 1
+    dy = 1
 
-    xmin, xmax = 0, 200
-    ymin, ymax = 0, 120
-    tmin, tmax = 0, 30
+    xmin, xmax = 0, 1000
+    ymin, ymax = 0, 100
+    tmin, tmax = 0, 1
 
+    # Solver
     s = SolverFDTD2D(xmin, xmax, dx, ymin, ymax, dy, tmin, tmax, dt)
 
-    window = np.zeros(s.t.shape)
-    window[:int(10 / dt)] = signal.tukey(int(10 / dt))
-    e1 = Emitter(((xmax - xmin) / dx) // 2, ((ymax - ymin) / dy) // 2, lambda x : window[int(x / dt)] * np.sin(2 * np.pi * 50 * x))
+    # Boundary conditions
+    s.set_border_attenuation(np.array([[0, 20], [20, 20]]))
+
+    # Emitters
+    e1 = Emitter(0, 20, lambda x : 100 * np.sin(2 * np.pi * 50 * x))
     s.emitters.append(e1)
-    # e2 = Emitter((3 *(M - m) / dx) // 4, (3 * (M - m) / dy) // 4, lambda x : 100 * np.sin(5 * x))
-    # s.emitters.append(e2)
 
-    r1 = Reciever((5 * (xmax - xmin) / dx) // 6, ((ymax - ymin) / dy) // 6)
-    s.recievers.append(r1)
-    r2 = Reciever((5 * (xmax - xmin) / dx) // 6, (4 * (ymax - ymin) / dy) // 6)
-    s.recievers.append(r2)
+    # Recievers
+    # r1 = Reciever(1000, 20)
+    # s.recievers.append(r1)
 
-    s.allocate_arrays()
+    # Materials
+    M = np.empty((s.n, s.m), dtype=object)
+    M[:, :] = water
+    s.add_scene(M)
 
+    # Simulation
+    print(f"Courant Number: {s.CourantNumber()}")
     fps = 30
     dT = 1 / fps
 
-    fig = plt.figure()
-    ax = plt.subplot()
-    im = ax.imshow(np.zeros((s.m, s.n)), cmap="RdBu", vmin=-5e-4, vmax=5e-4, aspect="auto")
-    ax.set_xlabel(r"x ($m$)")
-    ax.set_ylabel(r"y ($m$)")
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: value * s.dx))
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: value * s.dy))
-    fig.colorbar(im, orientation="horizontal")
-
-    for i, P in s.solve(dT):
-        plt.title("Time: {:.2f}s".format(i * dt))
-        im.set_array(np.sum(P, axis=2).T) #[s.xindex, s.yindex]
-        plt.savefig(f"./output/2dfdtd_{i:05}.png", dpi=180)
-
-    # fig, ax = r1.temporal()
-    # plt.savefig("./output/temporal_reciever.png")
-    # fig, ax = r1.fft()
-    # plt.savefig("./output/fft_reciever.png")
-    # fig, ax = r1.spectrogram()
-    # plt.savefig("./output/spectorgram_reciever.png")
-    # fig, ax = e1.temporal()
-    # plt.savefig("./output/temporal_emitter.png")
-    # fig, ax = e1.fft()
-    # plt.savefig("./output/fft_emitter.png")
-    # fig, ax = e1.spectrogram()
-    # plt.savefig("./output/spectrogram_emitter.png")
+    # A = np.memmap("output/Pressure_Field.npy", dtype='float32', mode='w+', shape=(s.n, s.m, 3, s.t.size))
+    # A[:, :, :, 0] = np.zeros((s.n, s.m, 3))
+    
+    t0 = time.time()
+    k = 1
+    for i in s.solve(dT):
+        # A[:, :, :, k] = P[s.i_index, s.j_index]
+        k += 1
+        # np.save(f"output/Pressure_Field_{int(i * dt / dT) + 1:05}.npy", P)
+    print(f"Took : {time.time() - t0}")
