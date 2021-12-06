@@ -1,14 +1,22 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import signal
+from numpy.core.numeric import convolve
+from scipy import signal, interpolate
 
 from dataclasses import dataclass, InitVar
 from typing import Callable
 
+import scipy
+
+from pyac.Acoustics import Module
+
 @dataclass
-class Source:
+class Source(Module):
     dt: float
     t: np.ndarray
+    dx: float
+    dy: float
+    dz: float
 
     omega_0: InitVar[float]
     signal: Callable[[float], float] = lambda x: 0*x
@@ -23,19 +31,32 @@ class Source:
 
         beta = omega_0 / np.tan(omega_0 * self.dt / 2)
 
-        a = [1, 2 * (self.K - self.M * beta**2) / (self.M * beta**2 + self.R * beta + self.K), 1 - 2 * self.R * beta / (self.M * beta**2 + self.R * beta + self.K)]
-        b = [beta / (self.M * beta**2 + self.R * beta + self.K), 0, - beta / (self.M * beta**2 + self.R * beta + self.K)]
+        a = np.array([1, 2 * (self.K - self.M * beta**2) / (self.M * beta**2 + self.R * beta + self.K), 1 - 2 * self.R * beta / (self.M * beta**2 + self.R * beta + self.K)])
+        b = np.array([beta / (self.M * beta**2 + self.R * beta + self.K), 0, - beta / (self.M * beta**2 + self.R * beta + self.K)])
         self.u = signal.lfilter(b, a, self.signal(self.t))
-        self.q = self.rho * self.A / (dx * dy * dz) * self.u
+        self.q = self.rho * self.A / (self.dx * self.dy * self.dz) * self.u
         self.psi = 1 / (2 * self.dt) * signal.lfilter([1, 0, -1], [1], self.q)
+
+        self.f = interpolate.interp1d(self.t, self.psi)
 
     def sphere(self, omega_0, Q):
         self.R = omega_0 * self.M / Q
         self.K =  self.M * omega_0**2
 
+    def __getitem__(self, key):
+        return self.f(key)
+
 def function(t, mu=5, sig = 1.5):
-    omega_0 = 2 * np.pi * 1
-    return np.sin(omega_0 * t) * 250e-6 * np.exp(-np.power(t - mu, 2.) / (2 * np.power(sig, 2.)))
+    omega_0 = 2 * np.pi * 50
+    return np.sin(omega_0 * t) * np.exp(-np.power(t - mu, 2.) / (2 * np.power(sig, 2.)))
+
+def function2(t, n):
+    sig = np.ones((t.shape))
+    sig[:n] = 0
+    sig[t.size - n:] = 0
+    filt = signal.windows.hann(n)
+    return signal.convolve(sig, filt, mode='same') / np.sum(filt) * np.sin(2 * np.pi * 50 * t)
+
 
 if __name__ == "__main__":
     dt = 0.001
@@ -44,7 +65,7 @@ if __name__ == "__main__":
 
     omega_0 = 2 * np.pi * 50
 
-    s = Source(dt, T, omega_0, signal=function)
+    s = Source(0, 0, T, dt, dx, dy, dz, omega_0, signal=function)
 
     fig, ax = plt.subplots()
     ax.plot(s.t, s.signal(s.t), label=r"$F(t)$", color="crimson")
