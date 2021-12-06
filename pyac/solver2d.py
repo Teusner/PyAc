@@ -1,13 +1,11 @@
 from pyac.Acoustics import *
 from pyac.Material import *
-from pyac.sources import Source, function, function2
 
 import cupy as cp
 import math
 from numba import cuda
 import numpy as np
 from scipy import integrate
-
 
 
 # Global variables to be stored in shared memory [n, m, dx, dy, dt]
@@ -48,11 +46,11 @@ class Solver2D:
 
     def allocate_arrays(self):
         global global_data
-        global_data = np.array([self.size[0], self.size[1], 1/(24*self.dx), 1/(24*self.dy), self.dt, (2 * self.tau_sigma[0] - dt) / (2 * self.tau_sigma[0] + dt), 2 * dt / (2 * self.tau_sigma[0] + dt)])
+        global_data = np.array([self.size[0], self.size[1], 1/(24*self.dx), 1/(24*self.dy), self.dt, (2 * self.tau_sigma[0] - self.dt) / (2 * self.tau_sigma[0] + self.dt), 2 * self.dt / (2 * self.tau_sigma[0] + self.dt)])
         self.Field = cuda.to_device(np.zeros((self.size[0], self.size[1], 8), dtype=np.float32))
 
         b = (self.border / np.array([[self.dy, self.dx], [self.dy, self.dx]])).astype(np.int32)
-        self.dtrho_i = cuda.to_device(np.pad(np.array([[dt / m.rho for m in line] for line in self.M]), pad_width=b, mode="edge"))
+        self.dtrho_i = cuda.to_device(np.pad(np.array([[self.dt / m.rho for m in line] for line in self.M]), pad_width=b, mode="edge"))
         self.eta_i = cuda.to_device(np.pad(np.array([[m.eta for m in line] for line in self.M]), pad_width=b, mode="edge"))
         self.mu_i = cuda.to_device(np.pad(np.array([[m.mu for m in line] for line in self.M]), pad_width=b, mode="edge"))
         Q_tau_g = self.Q_tau_gamma()
@@ -111,7 +109,7 @@ class Solver2D:
         def step(current_t):
             self.FDTD2D[self.blockspergrid, self.threadsperblock](self.Field, self.B_i, self.f(current_t), self.dtrho_i, self.eta_i, self.mu_i, self.tau_gamma_p_i, self.tau_gamma_s_i)
             for r in self.recievers:
-                r[current_t] = np.sum(self.P[int((r.y + self.border[0, 0])/ self.dy), int((r.x + self.border[0, 1]) / self.dx)])
+                r[current_t] = np.sum(self.Field[int((r.y + self.border[0, 0])/ self.dy), int((r.x + self.border[0, 1]) / self.dx)])
 
         current_t = 0
         for t_ret in dT:
