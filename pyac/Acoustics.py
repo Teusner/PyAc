@@ -1,6 +1,15 @@
+"""
+==============================================================
+Acoustics, (:mod:`pyac.Acoustics`)
+==============================================================
+This module provides a number of helpful objects to deal with
+Finite Difference Time Domain simulation, such as `Emitter`,
+`Reciever` modules.
+
+"""
 from dataclasses import dataclass, field, InitVar
 from typing import Callable
-from abc import ABC
+import abc
 
 import numpy as np
 from scipy import signal, interpolate
@@ -13,30 +22,58 @@ def d_gaussian(x, mu, sig):
     return - (x - mu) / (np.power(sig, 3.) * np.sqrt(2 * np.pi)) * np.exp(- np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
 
 @dataclass
-class Module(ABC):
+class Module(abc.ABC):
+    """An abstract base class for acoustic module.
+    
+    Module is an abstract base class for representing acoustic
+    module such as Emitter or Reciever.
+
+    Parameters
+    ----------
+    x : float
+        `x`-coordinate of the Module in meter.
+    y : float
+        `y`-coordinate of the Module in meter.
+    """
     x: float
     y: float
     t: list = field(init=False, default_factory=list)
     s: list = field(init=False, default_factory=list)
 
     def temporal(self):
+        """Plot the signal of the Module
+        Returns
+        -------
+        [fig, ax] : matplotlib.pyplot.figure, matplotlib.pyplot.axes
+            Figure and axes representing the signal of the module.
+        See Also
+        --------
+        fft, spectrogram
+        """
         fig, ax = plt.subplots()
         ax.set_title("Signal of " + str(self))
         ax.set_xlabel(r"Time ($s$)")
         ax.set_ylabel(r"Pressure ($Pa$)")
         ax.grid(True)
-        # if self.t and self.s:
         ax.plot(self.t, self.s)
         ax.set_xlim(np.min(self.t), np.max(self.t))
         return fig, ax
 
     def fft(self):
+        """Plot the Fast Fourier Transform of the Module
+        Returns
+        -------
+        [fig, ax] : matplotlib.pyplot.figure, matplotlib.pyplot.axes
+            Figure and axes representing the Fast Fourier Transform of the module.
+        See Also
+        --------
+        temporal, spectrogram
+        """
         fig, ax = plt.subplots()
         ax.set_title(f"FFT of " + str(self))
         ax.set_xlabel(r"Frequency ($Hz$)")
         ax.set_ylabel(r"Magnitude ($Power$)")
         ax.grid(True)
-        # if self.t and self.s:
         freq = np.fft.fftfreq(len(self.t), self.t[1] - self.t[0])
         sp = np.fft.fft(self.s)
         ax.plot(freq, np.abs(sp.real))
@@ -44,15 +81,22 @@ class Module(ABC):
         return fig, ax
 
     def spectrogram(self):
+        """Plot the spectrogram of the Module
+        Returns
+        -------
+        [fig, ax] : matplotlib.pyplot.figure, matplotlib.pyplot.axes
+            Figure and axes representing the spectrogram of the module.
+        See Also
+        --------
+        temporal, fft
+        """
         fig, ax = plt.subplots()
         ax.set_title(f"Spectrogram of " + str(self))
         ax.set_xlabel(r"Time ($s$)")
         ax.set_ylabel(r"Frequency ($Hz$)")
         ax.grid(True)
-        # if self.t and self.s:
         f, t, Sxx = signal.spectrogram(np.array(self.s), fs=30)
         ax.pcolormesh(t, f, Sxx, shading="auto")
-        # ax.specgram(self.y, Fs=30)
         return fig, ax
 
 
