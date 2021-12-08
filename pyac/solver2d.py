@@ -124,15 +124,6 @@ class Solver2D:
                 current_t += self.dt
                 step(current_t)
             yield current_t, np.sum(self.Field[self.i_index, self.j_index, 2:5], axis=2)
-        
-
-    @staticmethod
-    @cuda.jit
-    def get_P(Field, P):
-        i, j = cuda.grid(2)
-        P[i, j] = 0
-        for k in range(3):
-            P[i, j] += Field[i, j, k]
 
     @staticmethod
     @cuda.jit
