@@ -12,7 +12,7 @@ from typing import Callable
 import abc
 
 import numpy as np
-from scipy import signal, interpolate
+from scipy import signal, interpolate, stats
 import matplotlib.pyplot as plt
 
 def gaussian(x, mu, sig):
@@ -34,6 +34,13 @@ class Module(abc.ABC):
         `x`-coordinate of the Module in meter.
     y : float
         `y`-coordinate of the Module in meter.
+
+    Attributes
+    ----------
+    t : (N,) array_like
+        Time domain in seconds
+    s : (N,) array_like
+        Signal `s(t)`
     """
     x: float
     y: float
@@ -55,7 +62,7 @@ class Module(abc.ABC):
         ax.set_xlabel(r"Time ($s$)")
         ax.set_ylabel(r"Pressure ($Pa$)")
         ax.grid(True)
-        ax.plot(self.t, self.s)
+        ax.plot(self.t, self(self.t))
         ax.set_xlim(np.min(self.t), np.max(self.t))
         return fig, ax
 
@@ -75,7 +82,7 @@ class Module(abc.ABC):
         ax.set_ylabel(r"Magnitude ($Power$)")
         ax.grid(True)
         freq = np.fft.fftfreq(len(self.t), self.t[1] - self.t[0])
-        sp = np.fft.fft(self.s)
+        sp = np.fft.fft(self(self.t))
         ax.plot(freq, np.abs(sp.real))
         ax.set_xlim(np.min(freq), np.max(freq))
         return fig, ax
@@ -95,53 +102,74 @@ class Module(abc.ABC):
         ax.set_xlabel(r"Time ($s$)")
         ax.set_ylabel(r"Frequency ($Hz$)")
         ax.grid(True)
-        f, t, Sxx = signal.spectrogram(np.array(self.s), fs=30)
+        f, t, Sxx = signal.spectrogram(np.array(self(self.t)), fs=30)
         ax.pcolormesh(t, f, Sxx, shading="auto")
         return fig, ax
 
 
 @dataclass
 class Emitter(Module):
-    dt: float
-    t: np.ndarray
-    dx: float
-    dy: float
-    dz: float
-
-    omega_0: InitVar[float]
-    signal: Callable[[float], float] = lambda x: 0*x
-
+    omega_0: float
+    Q: float = 1
     M: int = 0.1
     A: float = 6
-    Q: InitVar[float] = 0.0001
-    rho: float = 1000
+    f: Callable[[float], float] = lambda x: 0 * x
 
-    def __post_init__(self, omega_0: float, Q: float):
-        self.sphere(omega_0, Q)
+    def __post_init__(self):
+        self.R = self.omega_0 * self.M / self.Q
+        self.K =  self.M * self.omega_0**2
 
-        beta = omega_0 / np.tan(omega_0 * self.dt / 2)
-
+    def update(self, t, dt, rho, v):
+        """Updating the Reciever with scene parameters
+        
+        Parameters
+        ----------
+        t : list or 1-D array
+            Time domain
+        dt : float
+            Time step
+        rho : float
+            Medium density at Emitter position
+        v : float
+            Finite differences cell volume
+        """
+        beta = self.omega_0 / np.tan(self.omega_0 * dt / 2)
         a = np.array([1, 2 * (self.K - self.M * beta**2) / (self.M * beta**2 + self.R * beta + self.K), 1 - 2 * self.R * beta / (self.M * beta**2 + self.R * beta + self.K)])
         b = np.array([beta / (self.M * beta**2 + self.R * beta + self.K), 0, - beta / (self.M * beta**2 + self.R * beta + self.K)])
-        self.u = signal.lfilter(b, a, self.signal(self.t))
-        self.q = self.rho * self.A / (self.dx * self.dy * self.dz) * self.u
-        self.psi = 1 / (2 * self.dt) * signal.lfilter([1, 0, -1], [1], self.q)
+        self.u = signal.lfilter(b, a, self.f(t))
+        self.q = rho * self.A / v * self.u
+        self.t = t.tolist()
+        self.s = (1 / (2 * dt) * signal.lfilter([1, 0, -1], [1], self.q)).tolist()
 
-        self.f = interpolate.interp1d(self.t, self.psi)
-        self.s = self.f(self.t)
+    def __getitem__(self, time):
+        return self.f(time)
 
-    def sphere(self, omega_0, Q):
-        self.R = omega_0 * self.M / Q
-        self.K =  self.M * omega_0**2
-
-    def __getitem__(self, key):
-        return self.f(key)
+    def __call__(self, t):
+        f = interpolate.interp1d(self.t, self.s, kind="linear")
+        return f(t)
     
     def __repr__(self):
         return f"Emitter at ({self.x}, {self.y})"
 
-
+@dataclass
 class Reciever(Module):
+    """An acoustic Reciever.
+
+    Record an acoustic signal at his position.
+    This module is filled up by a solver.
+
+    Parameters
+    ----------
+    n : None or scipy.stats.rv*. Default: None.
+        Specifies an aditional noise model to be added on
+        the recorded signal. If not None, the `rvs()` mehtod
+        will be used to generate the noise on the
+        `scipy.stats.rv*` object.
+    """
+
+    n: None = field(default_factory=None)
+    noise: list = field(init=False, default_factory=list)
+
     def __repr__(self):
         return f"Reciever at ({self.x}, {self.y})"
 
@@ -153,6 +181,28 @@ class Reciever(Module):
     def __setitem__(self, key, value):
         self.t.append(key)
         self.s.append(value)
+        if self.n is not None:
+            self.noise.append(self.n.rvs(1)[0])
+        else:
+            self.noise.append(0)
+
+    def __call__(self, t):
+        """Get the recorded signal at t
+
+        Parameters
+        ----------
+        t : float or 1-D array of floats
+            Times of the wanted signal
+
+        Returns
+        -------
+        s : float
+            The recorded signal interpolated at t
+            using a previous interpolation method.
+        """
+        f = interpolate.interp1d(self.t, np.asarray(self.s) + np.asarray(self.noise), kind="previous")
+        return f(t)
+
 
 def function(t, mu=5, sig = 1.5):
     omega_0 = 2 * np.pi * 50
@@ -174,10 +224,11 @@ if __name__ == "__main__":
 
     omega_0 = 2 * np.pi * 50
 
-    e = Emitter(0, 0, T, dt, dx, dy, dz, omega_0, signal=function)
+    e = Emitter(0, 0, omega_0, signal=function)
+    e.update(T, dt, 1000, 1)
 
     fig, ax = plt.subplots()
-    ax.plot(e.t, e.signal(e.t), label=r"$F(t)$", color="crimson")
+    ax.plot(T, e(T), label=r"$F(t)$", color="crimson")
     ax.legend(loc="best")
     ax.set_title("Force applied to the sphere", fontsize=14)
     ax.set_xlabel(r"Time ($s$)", fontsize=11)
@@ -187,8 +238,8 @@ if __name__ == "__main__":
     fig.set_tight_layout(True)
 
     fig, ax = plt.subplots()
-    ax.plot(e.t, e.q, label=r"$q_n$", color="purple")
-    ax.plot(e.t, e.psi, label=r"$\psi_n$", color="teal")
+    ax.plot(T, e.q, label=r"$q_n$", color="purple")
+    ax.plot(T, e(T), label=r"$\psi_n$", color="teal")
     ax.legend(loc="best")
     ax.set_title("Pressure generated by a pulsing sphere", fontsize=14)
     ax.set_xlabel(r"Time ($s$)", fontsize=11)
@@ -207,7 +258,8 @@ if __name__ == "__main__":
     filtered = signal.sosfilt(sos, e.s)
 
     # Hydrophone
-    r = Reciever(100, 200)
+    n = stats.norm(0, 0.5)
+    r = Reciever(100, 200, n)
     for i, time in enumerate(T):
         r[time] = filtered[i]
 

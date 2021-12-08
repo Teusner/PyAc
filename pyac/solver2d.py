@@ -44,6 +44,11 @@ class Solver2D:
             raise ValueError("Scene has not the solver dimension!")
         self.M = M
 
+    def add_emitter(self, e):
+        m = self.M[e.x, e.y]
+        e.update(self.t, self.dt, m.rho, self.dx ** 2 * self.dy)
+        self.emitters.append(e)
+
     def allocate_arrays(self):
         global global_data
         global_data = np.array([self.size[0], self.size[1], 1/(24*self.dx), 1/(24*self.dy), self.dt, (2 * self.tau_sigma[0] - self.dt) / (2 * self.tau_sigma[0] + self.dt), 2 * self.dt / (2 * self.tau_sigma[0] + self.dt)])
